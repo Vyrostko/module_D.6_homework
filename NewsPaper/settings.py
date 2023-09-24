@@ -36,6 +36,8 @@ INSTALLED_APPS = [
     'protect',
     'appointment',
 
+    # надо указать не имя нашего приложения, а его конфиг, чтобы всё заработало
+    'appointment.apps.AppointmentConfig',
     'django.contrib.sites',
     'django.contrib.flatpages',
 
