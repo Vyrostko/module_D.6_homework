@@ -1,60 +1,72 @@
 import logging
- 
 from django.conf import settings
- 
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from django.core.management.base import BaseCommand
+import datetime
 from django_apscheduler.jobstores import DjangoJobStore
 from django_apscheduler.models import DjangoJobExecution
- 
- 
+from django.core.mail import send_mail, EmailMultiAlternatives
+from django.template.loader import render_to_string
+from ...models import Category, CategorySubscriber, Post
+from django.urls import reverse
+from django.utils import timezone
+from datetime import datetime, timedelta
+
 logger = logging.getLogger(__name__)
- 
- 
-# наша задача по выводу текста на экран
-# python manage.py runapscheduler
-def my_job():
-    #  Your job processing logic here... 
-    print('hello from job')
- 
- 
+
+def send_weekly_article_list():
+    start_date = datetime.today() - timedelta(days=6)
+    this_weeks_posts = Post.objects.filter(dateCreation__gt=start_date)
+    for cat in Category.objects.all():
+        post_list = this_weeks_posts.filter(postCategory=cat)
+        if post_list:
+            subscribers = cat.subscribers.all()
+            context = {
+                'post_list': post_list,
+                'cat': cat,
+            }
+
+            for sub in subscribers:
+                context['sub'] = sub
+                html_content = render_to_string('weekly_article_list_email.html', context)
+
+                msg = EmailMultiAlternatives(
+                    subject=f'{cat.name}: Посты за прошедшую неделю',
+                    from_email='roma.sitdikov@yandex.ru',
+                    to=[sub.email],
+                )
+                msg.attach_alternative(html_content, "text/html")
+                # msg.send()
+                print(html_content)
+
+
 # функция которая будет удалять неактуальные задачи
-def delete_old_job_executions(max_age=604_800):
+def delete_old_job_executions(scheduler, max_age=604_800):
     """This job deletes all apscheduler job executions older than `max_age` from the database."""
     DjangoJobExecution.objects.delete_old_job_executions(max_age)
- 
- 
+
 class Command(BaseCommand):
     help = "Runs apscheduler."
- 
+
+    # Здесь будет прописываться как часто будет отправляться сообщение (раз в неделю)
     def handle(self, *args, **options):
         scheduler = BlockingScheduler(timezone=settings.TIME_ZONE)
         scheduler.add_jobstore(DjangoJobStore(), "default")
-        
+
         # добавляем работу нашему задачнику
         scheduler.add_job(
-            my_job,
-            trigger=CronTrigger(second="*/10"),  # Тоже самое что и интервал, но задача тригера таким образом более понятна django
-            id="my_job",  # уникальный айди
+            send_weekly_article_list,
+            trigger=CronTrigger(second="*/40"),
+            id="send_weekly_article_list",
             max_instances=1,
             replace_existing=True,
         )
-        logger.info("Added job 'my_job'.")
- 
-        scheduler.add_job(
-            delete_old_job_executions,
-            trigger=CronTrigger(
-                day_of_week="mon", hour="00", minute="00"
-            ),  # Каждую неделю будут удаляться старые задачи, которые либо не удалось выполнить, либо уже выполнять не надо.
-            id="delete_old_job_executions",
-            max_instances=1,
-            replace_existing=True,
-        )
-        logger.info(
-            "Added weekly job: 'delete_old_job_executions'."
-        )
- 
+        logger.info("Added job 'send_weekly_article_list'.")
+
+        delete_old_job_executions(scheduler)
+
         try:
             logger.info("Starting scheduler...")
             scheduler.start()
